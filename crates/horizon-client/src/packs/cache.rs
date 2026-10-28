@@ -529,6 +529,38 @@ mod tests {
     }
 
     #[test]
+    fn a_pack_naming_a_directory_in_two_cases_leaves_vanilla_alone() {
+        use std::io::Write;
+        let f = Fixture::new();
+        let lang = "assets/minecraft/lang/en_us.json";
+        f.write(&format!("vanilla/{lang}"), br#"{"v":"a"}"#);
+        // Windows (and macOS) see `Lang` and `lang` as one directory, so the
+        // overlay mirrors it twice; the merged file must not go through a link
+        // the first pass made to vanilla's own file.
+        let zip_path = f.0.join("cases.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+        for (name, data) in [
+            (
+                "pack.mcmeta",
+                &br#"{"pack":{"description":"test","pack_format":97}}"#[..],
+            ),
+            ("assets/minecraft/Lang/other.json", br#"{}"#),
+            ("assets/minecraft/lang/en_us.json", br#"{"p":"a"}"#),
+        ] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+        let pack = packs::pack("cases".into(), Text::empty(), Source::Zip(zip_path)).unwrap();
+        packs::build_overlay(&f.0.join("vanilla"), &[pack], &f.0.join("cached")).unwrap();
+        assert_eq!(
+            fs::read(f.0.join("vanilla").join(lang)).unwrap(),
+            br#"{"v":"a"}"#
+        );
+    }
+
+    #[test]
     fn directory_inputs_config_and_owned_output_recovery() {
         let f = Fixture::new();
         let resource = "assets/minecraft/lang/en_us.json";

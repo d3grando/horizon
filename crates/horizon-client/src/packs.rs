@@ -504,6 +504,10 @@ fn build_overlay_uncached(
         }
         for name in names {
             let child = format!("{prefix}{name}");
+            // A zip can name one directory in two cases, which Windows and macOS treat as one,
+            // so this name may already be a link to vanilla's file: writing through it would
+            // change vanilla's own file. The old entry goes first.
+            let _ = fs::remove_file(out.join(&child));
             if let Some(bytes) = merged.get(&child) {
                 fs::write(out.join(&child), bytes)?;
             } else if let Some((owner, (path, inner))) = files.get(&child) {
