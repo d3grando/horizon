@@ -9,7 +9,8 @@ use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
 // Version 3 could omit untouched vanilla directories on Windows (#1649, #1688).
-const VERSION: u32 = 4;
+// Version 4 copied every vanilla file on Windows and hashed them all on every hit (#3290).
+const VERSION: u32 = 5;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {
@@ -487,6 +488,44 @@ mod tests {
             packs::build_overlay(&vanilla, selected, &out).unwrap();
             check();
         }
+    }
+
+    #[test]
+    #[cfg(not(unix))]
+    fn windows_overlays_share_vanilla_files_instead_of_copying_them() {
+        let f = Fixture::new();
+        let texture = "assets/minecraft/textures/block/stone.png";
+        let model = "assets/minecraft/models/block/stone.json";
+        let lang = "assets/minecraft/lang/en_us.json";
+        f.write(&format!("vanilla/{texture}"), b"vanilla texture");
+        f.write(&format!("vanilla/{model}"), b"model 1");
+        f.write(&format!("vanilla/{lang}"), br#"{"v":"a"}"#);
+        let pack = f.dir_pack("pack");
+        f.write(&format!("pack/{texture}"), b"pack texture");
+        f.write(&format!("pack/{lang}"), br#"{"p":"a"}"#);
+        f.rebuild_matches(std::slice::from_ref(&pack));
+        let vanilla = f.0.join("vanilla");
+        let out = f.0.join("cached");
+        // Only the merged file's vanilla layer is checked by its bytes: a hit
+        // reads no other vanilla file (#3290).
+        let marker: Marker = serde_json::from_slice(&fs::read(marker_path(&out)).unwrap()).unwrap();
+        let vanilla_files: Vec<_> = marker
+            .dependencies
+            .entries
+            .iter()
+            .filter(|(path, directory, _)| !directory && path.starts_with(&vanilla))
+            .map(|(path, ..)| path.clone())
+            .collect();
+        assert_eq!(vanilla_files, [vanilla.join(lang)]);
+        // The overlay's model is vanilla's own file, not a copy of it.
+        fs::write(vanilla.join(model), b"model 2").unwrap();
+        assert_eq!(fs::read(out.join(model)).unwrap(), b"model 2");
+        // Files the overlay writes stay its own.
+        assert_eq!(fs::read(vanilla.join(texture)).unwrap(), b"vanilla texture");
+        assert_eq!(fs::read(vanilla.join(lang)).unwrap(), br#"{"v":"a"}"#);
+        assert_eq!(fs::read(out.join(texture)).unwrap(), b"pack texture");
+        f.rebuild_matches(std::slice::from_ref(&pack));
+        assert_eq!(fs::read(out.join(model)).unwrap(), b"model 2");
     }
 
     #[test]

@@ -537,11 +537,19 @@ fn build_overlay_uncached(
             } else if filters.iter().any(|f| f.blocks(&child)) {
                 // Hidden by a pack's filter.
             } else {
+                let source = vanilla.join(&child);
+                // Windows mirrors every vanilla file. A hard link shares the file, as the unix
+                // link does: nothing is copied, a later launch checks no bytes, and loading
+                // opens files Defender has already scanned (#3290). A copy (another volume,
+                // or the link limit) is checked by its content.
                 #[cfg(not(unix))]
-                if vanilla.join(&child).is_file() {
-                    dependencies.file(&vanilla.join(&child));
+                if source.is_file() {
+                    if fs::hard_link(&source, out.join(&child)).is_ok() {
+                        continue;
+                    }
+                    dependencies.file(&source);
                 }
-                link(&vanilla.join(&child), &out.join(&child))?;
+                link(&source, &out.join(&child))?;
             }
         }
         Ok(())
